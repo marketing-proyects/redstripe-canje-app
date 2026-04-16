@@ -33,7 +33,6 @@ def get_base64(file_path):
 
 def get_random_bg():
     bg_dir = "assets/fondos"
-    # Si no existe la carpeta, busca en raíz para no fallar
     search_dir = bg_dir if os.path.exists(bg_dir) else "."
     fondos = [f for f in os.listdir(search_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
     return os.path.join(search_dir, random.choice(fondos)) if fondos else None
@@ -49,7 +48,7 @@ st.markdown(f"""
         background-attachment: fixed;
     }}
     .main-card {{
-        background-color: rgba(255, 255, 255, 0.96);
+        background-color: rgba(255, 255, 255, 0.97);
         padding: 30px;
         border-radius: 15px;
         border-left: 10px solid #cc0000;
@@ -58,30 +57,42 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 4. CARGA DE DATOS CON LIMPIEZA ---
+# --- 4. CARGA DE DATOS (VERSION ULTRA-ROBUSTA) ---
 @st.cache_data
 def load_data():
-    # Productos
     df_p = pd.read_excel("productos.xlsx")
-    df_p.columns = [str(c).strip() for c in df_p.columns]
-    
-    # Beneficios
     df_b = pd.read_excel("config_beneficios.xlsx")
+    
+    # Limpieza inicial de nombres de columnas
+    df_p.columns = [str(c).strip() for c in df_p.columns]
     df_b.columns = [str(c).strip() for c in df_b.columns]
     
+    # Mapeo inteligente de columnas para config_beneficios
+    nuevos_nombres = {}
+    for col in df_b.columns:
+        c_low = col.lower()
+        if 'familia' in c_low: nuevos_nombres[col] = 'Familia'
+        elif 'base' in c_low: nuevos_nombres[col] = 'Dto. Base (%)'
+        elif 'unidad' in c_low: nuevos_nombres[col] = 'Dto. por Unidad (%)'
+        elif 'tope' in c_low or 'máx' in c_low or 'max' in c_low: nuevos_nombres[col] = 'Tope Máximo (%)'
+    
+    df_b = df_b.rename(columns=nuevos_nombres)
     return df_p, df_b
 
 try:
     df_productos, df_beneficios = load_data()
     
-    # Verificación de columnas para evitar el KeyError
-    req_cols = ['Familia', 'Dto. Base (%)', 'Dto. por Unidad (%)', 'Tope Máximo (%)']
-    for col in req_cols:
-        if col not in df_beneficios.columns:
-            st.error(f"⚠️ Error: No encuentro la columna '{col}' en config_beneficios.xlsx. Revisa el nombre exacto.")
-            st.stop()
+    # Validar que las columnas críticas existan tras el renombrado
+    requeridas = ['Familia', 'Dto. Base (%)', 'Dto. por Unidad (%)', 'Tope Máximo (%)']
+    faltantes = [c for c in requeridas if c not in df_beneficios.columns]
+    
+    if faltantes:
+        st.error(f"❌ Error de Columnas: No encuentro {faltantes}")
+        st.info(f"Columnas detectadas en tu archivo: {df_beneficios.columns.tolist()}")
+        st.stop()
+        
 except Exception as e:
-    st.error(f"❌ Error al cargar archivos: {e}")
+    st.error(f"❌ Error al cargar los archivos: {e}")
     st.stop()
 
 # --- 5. INTERFAZ DE USUARIO ---
@@ -103,14 +114,11 @@ with st.container():
 
     c3, c4 = st.columns(2)
     with c3:
-        # Usamos 'Nombre del modelo' para filtrar macro
         modelos = sorted(df_productos['Nombre del modelo'].dropna().unique())
         mod_sel = st.selectbox("Seleccione el Modelo", modelos)
     with c4:
         prods_filt = df_productos[df_productos['Nombre del modelo'] == mod_sel]
         prod_sel = st.selectbox("Variante del producto", prods_filt['Nombre del producto'].unique())
-        
-        # Obtener código SAP
         codigo_sap = prods_filt[prods_filt['Nombre del producto'] == prod_sel]['Código del producto'].values[0]
         st.info(f"Código SAP: **{codigo_sap}**")
 
@@ -130,19 +138,18 @@ with st.container():
         st.metric("DESCUENTO TOTAL", f"{dto_final}%")
     with res2:
         if calc_dto > tope:
-            st.warning(f"Se aplicó el tope máximo permitido de {tope}%")
+            st.warning(f"Tope máximo alcanzado: {tope}%")
         else:
-            st.success(f"Cálculo: {base}% base + ({cant_viejas} x {plus}%) por reciclaje.")
+            st.success(f"Cálculo: {base}% base + ({cant_viejas} x {plus}%) por unidades.")
 
-    # --- 7. EMISIÓN DE TICKET ---
+    # --- 7. EMISIÓN DE TICKET PDF ---
     if st.button("Finalizar y Emitir Ticket"):
         if not nro_cliente or not nombre_comprador:
-            st.error("Debe completar los datos del cliente.")
+            st.error("Por favor, completa los datos del cliente.")
         else:
             pdf = FPDF()
             pdf.add_page()
             
-            # Encabezado con estética Würth
             pdf.set_font("Arial", 'B', 16)
             pdf.set_text_color(204, 0, 0)
             pdf.cell(0, 15, "WÜRTH URUGUAY - PLAN CANJE REDSTRIPE", ln=True, align='C')
@@ -157,30 +164,28 @@ with st.container():
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             pdf.ln(10)
             
-            # Detalle comercial
             pdf.set_font("Arial", 'B', 12)
-            pdf.cell(0, 10, "RESUMEN DE BENEFICIO OTORGADO:", ln=True)
+            pdf.cell(0, 10, "DETALLE DEL BENEFICIO:", ln=True)
             pdf.set_font("Arial", '', 11)
             pdf.cell(0, 8, f"- Unidades recibidas para reciclaje: {cant_viejas}", ln=True)
-            pdf.cell(0, 8, f"- Familia aplicada: {familia_sel}", ln=True)
+            pdf.cell(0, 8, f"- Familia de producto: {familia_sel}", ln=True)
             pdf.cell(0, 8, f"- Producto seleccionado: {prod_sel}", ln=True)
-            pdf.cell(0, 8, f"- Codigo SAP: {codigo_sap}", ln=True)
+            pdf.cell(0, 8, f"- Código SAP: {codigo_sap}", ln=True)
             
             pdf.ln(10)
             pdf.set_font("Arial", 'B', 14)
             pdf.set_fill_color(240, 240, 240)
-            pdf.cell(0, 15, f"DESCUENTO A APLICAR: {dto_final}%", ln=True, align='C', fill=True)
+            pdf.cell(0, 15, f"DESCUENTO APLICABLE: {dto_final}%", ln=True, align='C', fill=True)
             
             pdf.ln(15)
             pdf.set_font("Arial", 'I', 8)
-            pdf.multi_cell(0, 5, "Este comprobante certifica la entrega de material para reciclaje y otorga un beneficio de descuento inmediato para la compra de herramientas nuevas REDSTRIPE. Valido unicamente por el dia de hoy.")
+            pdf.multi_cell(0, 5, "Este comprobante certifica la entrega de material para reciclaje y otorga un beneficio de descuento inmediato para la compra de productos REDSTRIPE.")
 
-            # Descarga del PDF
             pdf_bytes = pdf.output(dest='S').encode('latin-1')
             b64 = base64.b64encode(pdf_bytes).decode()
             filename = f"Canje_{nro_cliente}.pdf"
             
-            href = f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}" style="display:inline-block;padding:12px 24px;background-color:#cc0000;color:white;text-decoration:none;border-radius:6px;font-weight:bold;">📥 DESCARGAR COMPROBANTE PDF</a>'
+            href = f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}" style="display:inline-block;padding:12px 24px;background-color:#cc0000;color:white;text-decoration:none;border-radius:6px;font-weight:bold;">📥 DESCARGAR COMPROBANTE</a>'
             st.markdown(href, unsafe_allow_html=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
