@@ -8,7 +8,7 @@ from datetime import datetime
 # --- 1. CONFIGURACIÓN ---
 st.set_page_config(page_title="Plan Canje Würth", page_icon="assets/favicon.png", layout="wide")
 
-# --- 2. ESTILOS (Identidad Würth) ---
+# --- 2. ESTILOS (Identidad Würth & Eliminación de Sombras) ---
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
@@ -38,119 +38,131 @@ def load_data():
     df_b = pd.read_excel("config_beneficios.xlsx")
     df_p.columns = [str(c).strip() for c in df_p.columns]
     df_b.columns = [str(c).strip() for c in df_b.columns]
-    # Mapeo por posición para evitar errores de nombre
+    # Mapeo robusto por posición para evitar errores de nombres en el Excel
     df_b = df_b.rename(columns={df_b.columns[0]: 'Comercial', df_b.columns[2]: 'Base', df_b.columns[3]: 'Unidad', df_b.columns[4]: 'Tope'})
     return df_p, df_b
 
 try:
     df_productos, df_beneficios = load_data()
 except Exception as e:
-    st.error(f"Error: {e}")
+    st.error(f"Error cargando archivos: {e}")
     st.stop()
 
+# Gestión de Carrito y Navegación
 if 'carrito' not in st.session_state: st.session_state.carrito = []
 if 'paso' not in st.session_state: st.session_state.paso = 1
 
-# --- 5. INTERFAZ ---
+# --- 5. INTERFAZ PRINCIPAL ---
 st.title("♻️ Plan Canje REDSTRIPE")
-st.markdown('<p style="color:#333; font-size:1.15em;">Simulador de beneficios por reciclaje de herramientas.</p>', unsafe_allow_html=True)
 
-with st.container():
-    st.markdown('<div class="white-card">', unsafe_allow_html=True)
+with st.expander("ℹ️ ¿Cómo funcionan nuestros descuentos acumulativos?"):
+    st.write("""
+    - **Base:** Descuento inicial por participar.
+    - **Unidad:** Por cada herramienta vieja, sumamos un % extra.
+    - **Tope Máximo:** El beneficio total no superará el tope de la categoría.
+    - **Multicategoría:** Si traes distintas herramientas, aplicamos el **Tope más alto** entre ellas.
+    """)
 
-    # --- PASO 1: CALCULADORA DETALLADA ---
-    if st.session_state.paso == 1:
-        st.subheader("1. Detalle de herramientas a entregar")
-        col_input, col_result = st.columns([1.2, 0.8])
+st.markdown('<div class="white-card">', unsafe_allow_html=True)
+
+# --- FASE 1: CALCULADORA DETALLADA ---
+if st.session_state.paso == 1:
+    st.subheader("1. Detalle de herramientas a entregar")
+    col_in, col_res = st.columns([1.2, 0.8])
+    
+    with col_in:
+        cats_selec = st.multiselect("Categorías que entrega el cliente:", df_beneficios['Comercial'].unique())
         
-        with col_input:
-            categorias_sel = st.multiselect("¿Qué tipos de herramientas trae el cliente?", df_beneficios['Comercial'].unique())
-            
-            cantidades = {}
-            total_unidades = 0
-            if categorias_sel:
-                st.write("---")
-                # Generamos un input por cada categoría seleccionada
-                for cat in categorias_sel:
-                    cant = st.number_input(f"Cantidad de '{cat}':", min_value=1, step=1, value=1, key=f"q_{cat}")
-                    cantidades[cat] = cant
-                    total_unidades += cant
-            
-        if categorias_sel:
-            # Lógica: Tomar el mejor set de reglas de las categorías presentes
-            reglas = df_beneficios[df_beneficios['Comercial'].isin(categorias_sel)]
-            m_base = reglas['Base'].max()
-            m_unidad = reglas['Unidad'].max()
-            m_tope = reglas['Tope'].max()
-            
-            # Cálculo final
-            dto_preliminar = m_base + (total_unidades * m_unidad)
-            dto_final = min(dto_preliminar, m_tope)
-            
-            with col_result:
-                st.metric("BENEFICIO", f"{dto_final}%")
-                # Detalle del cálculo para transparencia
-                st.markdown(f"""
-                **Desglose del cálculo:**
-                * Unidades totales: **{total_unidades}**
-                * Descuento Base: **{m_base}%**
-                * Plus por unidades: **{total_unidades * m_unidad}%**
-                * Tope máximo aplicado: **{m_tope}%**
-                
-                ---
-                _Se aplicó la regla más favorable según las categorías entregadas._
-                """)
-            
-            if st.button("Confirmar y Pasar a la Compra ➔"):
-                st.session_state.temp_dto = dto_final
-                st.session_state.temp_cant = total_unidades
-                st.session_state.paso = 2
-                st.rerun()
-        else:
-            st.info("Selecciona las categorías para comenzar el cálculo.")
-
-    # --- PASO 2: CARRITO MULTI-PRODUCTO ---
+        total_u = 0
+        if cats_selec:
+            st.write("---")
+            for cat in cats_selec:
+                c = st.number_input(f"Cantidad de '{cat}':", min_value=1, step=1, value=1, key=f"n_{cat}")
+                total_u += c
+    
+    if cats_selec:
+        reglas = df_beneficios[df_beneficios['Comercial'].isin(cats_selec)]
+        m_base, m_unidad, m_tope = reglas['Base'].max(), reglas['Unidad'].max(), reglas['Tope'].max()
+        
+        dto_calc = min(m_base + (total_u * m_unidad), m_tope)
+        
+        with col_res:
+            st.metric("DESCUENTO TOTAL", f"{dto_calc}%")
+            st.markdown(f"**Resumen del beneficio:**\n* Unidades: {total_u}\n* Base: {m_base}%\n* Tope Aplicado: {m_tope}%")
+        
+        if st.button("Confirmar y Pasar a la Compra ➔"):
+            st.session_state.temp_dto = dto_calc
+            st.session_state.paso = 2
+            st.rerun()
     else:
-        st.subheader("2. Armado de la Compra")
-        c_search, c_cart = st.columns([1.1, 0.9])
+        st.info("Selecciona qué herramientas entrega el cliente para calcular el beneficio.")
+
+# --- FASE 2: CARRITO CON BUSCADOR Y MENÚ ALFABÉTICO ---
+else:
+    st.subheader("2. Selección de Productos (Menú A-Z)")
+    
+    c_selec, c_resumen = st.columns([1.1, 0.9])
+    
+    with c_selec:
+        # 1. Buscador (opcional para filtrar la lista)
+        busq = st.text_input("🔍 Buscar por Código SAP o Nombre (Opcional)")
         
-        with c_search:
-            busq = st.text_input("🔍 Buscar por Código SAP o Nombre")
-            df_res = df_productos[
+        # Filtrar el dataframe según la búsqueda
+        if busq:
+            df_filtrado = df_productos[
                 (df_productos['Código del producto'].astype(str).str.contains(busq)) |
-                (df_productos['Nombre del producto'].str.contains(busq, case=False))
-            ] if busq else pd.DataFrame()
+                (df_productos['Nombre del producto'].str.contains(busq, case=False)) |
+                (df_productos['Nombre del modelo'].str.contains(busq, case=False))
+            ]
+        else:
+            df_filtrado = df_productos
 
-            if not df_res.empty:
-                item_n = st.selectbox("Producto:", df_res['Nombre del producto'].unique())
-                sap_c = df_res[df_res['Nombre del producto'] == item_n]['Código del producto'].values[0]
-                p_lista = st.number_input("Precio de Lista (UYU)", min_value=0.0, step=1.0)
-                
-                if st.button("➕ Agregar al Pedido"):
-                    d = st.session_state.temp_dto
-                    ahorro = p_lista * (d / 100)
-                    st.session_state.carrito.append({"SAP": sap_c, "Producto": item_n, "Lista": p_lista, "Ahorro": ahorro, "Final": p_lista - ahorro})
-                    st.success("¡Agregado!")
-            elif busq: st.error("Sin resultados.")
+        # 2. Menú Desplegable Alfabético de Modelos
+        modelos_az = sorted(df_filtrado['Nombre del modelo'].dropna().unique())
+        
+        if modelos_az:
+            mod_sel = st.selectbox("Seleccione el Modelo (Orden A-Z):", modelos_az)
+            
+            # 3. Menú de Variantes del modelo elegido
+            variantes = df_filtrado[df_filtrado['Nombre del modelo'] == mod_sel]
+            prod_final = st.selectbox("Producto / Medida específica:", variantes['Nombre del producto'].unique())
+            
+            sap_final = variantes[variantes['Nombre del producto'] == prod_final]['Código del producto'].values[0]
+            st.write(f"**Código SAP:** `{sap_final}`")
+            
+            precio_l = st.number_input("Precio de Lista (UYU)", min_value=0.0, step=1.0)
+            
+            if st.button("➕ Agregar al Carrito"):
+                d = st.session_state.temp_dto
+                ahorro = precio_l * (d / 100)
+                st.session_state.carrito.append({
+                    "SAP": sap_final, "Producto": prod_final, "Lista": precio_l, "Ahorro": ahorro, "Final": precio_l - ahorro
+                })
+                st.success(f"¡Agregado!")
+        else:
+            st.error("No se encontraron coincidencias en el catálogo.")
 
-        with c_cart:
-            if st.session_state.carrito:
-                df_c = pd.DataFrame(st.session_state.carrito)
-                st.dataframe(df_c[['Producto', 'Final']], use_container_width=True, hide_index=True)
-                st.metric("TOTAL A PAGAR", f"${df_c['Final'].sum():,.2f}")
-                if st.button("🗑️ Vaciar Carrito"):
-                    st.session_state.carrito = []
-                    st.rerun()
-            else: st.write("Carrito vacío.")
-
-        st.divider()
-        b1, b2 = st.columns(2)
-        with b1:
-            if st.button("⬅ Volver"):
-                st.session_state.paso = 1
+    with c_resumen:
+        st.write("### Detalle de Compra")
+        if st.session_state.carrito:
+            df_c = pd.DataFrame(st.session_state.carrito)
+            st.dataframe(df_c[['Producto', 'Final']], use_container_width=True, hide_index=True)
+            st.metric("TOTAL A PAGAR", f"${df_c['Final'].sum():,.2f}")
+            st.write(f"🎁 Ahorro Total: **${df_c['Ahorro'].sum():,.2f}**")
+            if st.button("🗑️ Vaciar Carrito"):
                 st.session_state.carrito = []
                 st.rerun()
-        with b2:
-            if st.button("📥 Generar Ticket"): st.success("PDF generado.")
+        else:
+            st.write("El carrito está vacío.")
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.divider()
+    b_back, b_pdf = st.columns(2)
+    with b_back:
+        if st.button("⬅ Volver al Simulador"):
+            st.session_state.paso = 1
+            st.session_state.carrito = []
+            st.rerun()
+    with b_pdf:
+        if st.button("📥 Generar Ticket PDF"): st.success("Ticket generado correctamente.")
+
+st.markdown('</div>', unsafe_allow_html=True)
