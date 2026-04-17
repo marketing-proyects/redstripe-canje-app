@@ -5,197 +5,129 @@ import base64
 from fpdf import FPDF
 from datetime import datetime
 
-# --- 1. CONFIGURACIÓN DE PÁGINA ---
+# --- 1. CONFIGURACIÓN ---
 st.set_page_config(page_title="Plan Canje Würth", page_icon="assets/favicon.png", layout="wide")
 
-# --- 2. RESET TOTAL DE ESTILOS (ADIÓS RECUADROS GRISES) ---
-hide_st_style = """
-            <style>
-            #MainMenu {visibility: hidden;}
-            footer {visibility: hidden;}
-            header {visibility: hidden;}
-            .block-container {padding-top: 1rem;}
-
-            /* Eliminación radical de sombras y fondos automáticos de Streamlit */
-            div[data-testid="stVerticalBlock"] > div {
-                background-color: transparent !important;
-                box-shadow: none !important;
-                border: none !important;
-            }
-            
-            .stMarkdown div {
-                background-color: transparent !important;
-                box-shadow: none !important;
-            }
-
-            /* Estilo de métricas (Descuento) */
-            [data-testid="stMetricValue"] { font-size: 50px; color: #cc0000; font-weight: bold; }
-            
-            /* Botones estilo Würth */
-            .stButton>button { 
-                width: 100%; 
-                border-radius: 4px; 
-                height: 3.5em; 
-                background-color: #cc0000; 
-                color: white; 
-                border: none; 
-                font-weight: bold; 
-                font-size: 16px;
-            }
-            .stButton>button:hover { background-color: #a30000; color: white; border: none; }
-            </style>
-            """
-st.markdown(hide_st_style, unsafe_allow_html=True)
-
-# --- 3. LOGO Y CONTENEDOR VISUAL ---
-def get_base64(file_path):
-    if file_path and os.path.exists(file_path):
-        with open(file_path, "rb") as f:
-            return base64.b64encode(f.read()).decode()
-    return ""
-
-logo_base64 = get_base64("logo_wurth.png")
-
-st.markdown(f"""
+# --- 2. ESTILOS Y MÁSCARA ---
+st.markdown("""
     <style>
-    .logo-container {{
-        position: fixed;
-        top: 25px;
-        right: 50px;
-        width: 160px;
-        z-index: 1000;
-    }}
-    .white-card {{
-        background-color: #ffffff;
-        padding: 40px;
-        border-radius: 0px 0px 12px 12px;
-        border-top: 10px solid #cc0000; /* La línea roja que nos gusta */
-        box-shadow: 0 10px 25px rgba(0,0,0,0.05);
-        margin-top: 5px;
-    }}
-    .intro-text {{
-        color: #333;
-        font-size: 1.15em;
-        line-height: 1.6;
-        margin-bottom: 20px;
-    }}
+    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
+    .stMetricValue { font-size: 45px !important; color: #cc0000 !important; }
+    .stButton>button { width: 100%; border-radius: 4px; height: 3em; background-color: #cc0000; color: white; font-weight: bold; }
+    .white-card { background-color: #ffffff; padding: 30px; border-radius: 10px; border-top: 8px solid #cc0000; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
     </style>
-    <div class="logo-container">
-        <img src="data:image/png;base64,{logo_base64}">
-    </div>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# --- 4. CARGA DE DATOS ---
+# --- 3. CARGA DE DATOS ---
 @st.cache_data
 def load_data():
     df_p = pd.read_excel("productos.xlsx")
     df_b = pd.read_excel("config_beneficios.xlsx")
     df_p.columns = [str(c).strip() for c in df_p.columns]
     df_b.columns = [str(c).strip() for c in df_b.columns]
-    
-    mapping = {}
-    for c in df_b.columns:
-        low = c.lower()
-        if 'familia' in low: mapping[c] = 'Familia'
-        elif 'base' in low: mapping[c] = 'Base'
-        elif 'unidad' in low: mapping[c] = 'Unidad'
-        elif 'tope' in low or 'max' in low: mapping[c] = 'Tope'
-    df_b = df_b.rename(columns=mapping)
+    # Mapeo flexible
+    mapping = {'Nombre Comercial': 'Comercial', 'Familia': 'Tecnica', 'Dto. Base': 'Base', 'Dto. por Unidad': 'Unidad', 'Tope': 'Tope'}
+    df_b = df_b.rename(columns=lambda x: mapping.get(x, x))
     return df_p, df_b
 
 df_productos, df_beneficios = load_data()
 
-if 'paso' not in st.session_state:
-    st.session_state.paso = 1
+# --- 4. GESTIÓN DE CARRITO Y PASOS ---
+if 'carrito' not in st.session_state: st.session_state.carrito = []
+if 'paso' not in st.session_state: st.session_state.paso = 1
 
 # --- 5. INTERFAZ ---
 st.title("♻️ Plan Canje REDSTRIPE")
 
-# Explicación limpia (sin recuadros)
-st.markdown("""
-<div class="intro-text">
-    Este sistema es un <b>Simulador de Descuentos por Reciclaje</b>. Incentivamos a nuestros clientes a entregar 
-    sus herramientas viejas para asegurar un proceso de disposición responsable, otorgando a cambio 
-    <b>beneficios exclusivos</b> en la compra de nuevas herramientas Würth.
-</div>
-""", unsafe_allow_html=True)
+# PUNTO 5: Desplegable Informativo
+with st.expander("ℹ️ ¿Cómo funcionan nuestros descuentos?"):
+    st.write("""
+    1. **Beneficio Inicial:** Cada categoría tiene un descuento base por participar.
+    2. **Premio al Reciclaje:** Por cada herramienta vieja que entregues, sumamos un porcentaje adicional.
+    3. **Tope de Seguridad:** El descuento total no superará el tope máximo definido para la familia de productos.
+    4. **Múltiples Categorías:** Si entregas herramientas de distintos tipos, te otorgamos el **Tope de Descuento más alto** disponible.
+    """)
 
-# Inicio de la tarjeta blanca Würth
 st.markdown('<div class="white-card">', unsafe_allow_html=True)
 
+# PASO 1: CALCULADORA COMERCIAL
 if st.session_state.paso == 1:
-    st.subheader("1. Cálculo de Beneficio")
-    col1, col2 = st.columns(2)
+    st.subheader("1. Simulador de Beneficio")
+    c1, c2 = st.columns(2)
     
-    with col1:
-        cant = st.number_input("Herramientas viejas entregadas:", min_value=1, step=1, value=1)
-        fam = st.selectbox("Familia del producto a adquirir:", df_beneficios['Familia'].unique())
+    with c1:
+        cant = st.number_input("Cantidad total de herramientas a entregar:", min_value=1, value=1)
+        # Permitimos seleccionar múltiples para aplicar la regla del Tope más alto
+        fams_selecionadas = st.multiselect("Tipos de herramientas que entregas:", df_beneficios['Comercial'].unique())
     
-    regla = df_beneficios[df_beneficios['Familia'] == fam].iloc[0]
-    dto = min(regla['Base'] + (cant * regla['Unidad']), regla['Tope'])
-    
-    with col2:
-        st.metric("TU DESCUENTO:", f"{dto}%")
-        st.write(f"Al entregar **{cant}** herramientas, activas el beneficio máximo para la familia **{fam}**.")
-    
-    st.write("")
-    if st.button("Aplicar beneficio y ver productos ➔"):
-        st.session_state.temp_dto = dto
-        st.session_state.temp_cant = cant
-        st.session_state.paso = 2
-        st.rerun()
-
-else:
-    st.subheader("2. Detalle de Compra y Ahorro")
-    c3, c4 = st.columns(2)
-    
-    with c3:
-        nro = st.text_input("Nro. Cliente / RUT")
-        nom = st.text_input("Nombre del Comprador")
-        mod = st.selectbox("Modelo REDSTRIPE", sorted(df_productos['Nombre del modelo'].unique()))
-        items = df_productos[df_productos['Nombre del modelo'] == mod]
-        prod = st.selectbox("Producto específico", items['Nombre del producto'].unique())
-        sap = items[items['Nombre del producto'] == prod]['Código del producto'].values[0]
-        st.write(f"**Código SAP:** `{sap}`")
+    if fams_selecionadas:
+        reglas = df_beneficios[df_beneficios['Comercial'].isin(fams_selecionadas)]
         
-    with c4:
-        # El vendedor ingresa el precio del sistema para cerrar la venta
-        precio_l = st.number_input("Precio de Lista Unitario (UYU)", min_value=0.0, step=1.0)
-        final = precio_l * (1 - st.session_state.temp_dto / 100)
-        ahorro = precio_l - final
+        # Lógica Punto 4: Tomar el Tope más alto
+        mejor_tope = reglas['Tope'].max()
+        mejor_base = reglas['Base'].max()
+        mejor_unidad = reglas['Unidad'].max()
         
-        st.markdown(f"### Precio Final: <span style='color:#cc0000;'>${final:,.2f}</span>", unsafe_allow_html=True)
-        st.write(f"💰 Ahorro total por reciclaje: **${ahorro:,.2f}**")
-        st.write(f"📊 Bonificación aplicada: **{st.session_state.temp_dto}%**")
-
-    st.write("---")
-    b1, b2 = st.columns(2)
-    with b1:
-        if st.button("⬅ Volver a calcular"):
-            st.session_state.paso = 1
+        dto_final = min(mejor_base + (cant * mejor_unidad), mejor_tope)
+        
+        with c2:
+            st.metric("BENEFICIO HABILITADO", f"{dto_final}%")
+            st.info(f"Aplicando el tope máximo de beneficio ({mejor_tope}%) de las categorías seleccionadas.")
+        
+        if st.button("Siguiente: Armar Pedido ➔"):
+            st.session_state.temp_dto = dto_final
+            st.session_state.temp_cant = cant
+            st.session_state.paso = 2
             st.rerun()
-    with b2:
-        if st.button("📥 Generar Ticket PDF"):
-            pdf = FPDF()
-            pdf.add_page()
-            pdf.set_font("Arial", 'B', 16)
-            pdf.set_text_color(204, 0, 0)
-            pdf.cell(0, 15, "PLAN CANJE WÜRTH - TICKET DE BENEFICIO", ln=True, align='C')
-            pdf.ln(5)
-            pdf.set_font("Arial", '', 11)
-            pdf.set_text_color(0, 0, 0)
-            pdf.cell(0, 8, f"Cliente: {nro} | Fecha: {datetime.now().strftime('%d/%m/%Y')}", ln=True)
-            pdf.cell(0, 8, f"Producto: {prod} (SAP: {sap})", ln=True)
-            pdf.cell(0, 8, f"Unidades entregadas para reciclaje: {st.session_state.temp_cant}", ln=True)
-            pdf.ln(5)
-            pdf.set_font("Arial", 'B', 12)
-            pdf.cell(0, 10, f"Precio Lista: ${precio_l:,.2f}", ln=True)
-            pdf.cell(0, 10, f"Ahorro Plan Canje ({st.session_state.temp_dto}%): -${ahorro:,.2f}", ln=True)
-            pdf.set_text_color(204, 0, 0)
-            pdf.cell(0, 15, f"TOTAL A PAGAR: ${final:,.2f}", ln=True)
+    else:
+        st.warning("Selecciona al menos una categoría para calcular el beneficio.")
+
+# PASO 2: CARRITO DE COMPRAS MULTI-PRODUCTO
+else:
+    st.subheader("2. Selección de Productos (Punto de Venta)")
+    
+    col_a, col_b = st.columns([1.2, 0.8])
+    
+    with col_a:
+        busqueda = st.text_input("🔍 Buscar por Código SAP o Nombre")
+        df_filt = df_productos[
+            df_productos['Código del producto'].astype(str).str.contains(busqueda) | 
+            df_productos['Nombre del producto'].str.contains(busqueda, case=False)
+        ] if busqueda else df_productos.head(0)
+        
+        if not df_filt.empty:
+            item_sel = st.selectbox("Resultado de búsqueda:", df_filt['Nombre del producto'].unique())
+            codigo_sap = df_filt[df_filt['Nombre del producto'] == item_sel]['Código del producto'].values[0]
+            precio_l = st.number_input("Precio de Lista (UYU)", min_value=0.0, step=10.0)
             
-            pdf_bytes = pdf.output(dest='S').encode('latin-1')
-            b64 = base64.b64encode(pdf_bytes).decode()
-            st.markdown(f'<a href="data:application/octet-stream;base64,{b64}" download="Canje_Wurth.pdf" style="display:block; text-align:center; padding:12px; background-color:#28a745; color:white; border-radius:4px; text-decoration:none; font-weight:bold;">📥 DESCARGAR COMPROBANTE</a>', unsafe_allow_html=True)
+            if st.button("➕ Agregar al Carrito"):
+                dto_item = st.session_state.temp_dto
+                ahorro = precio_l * (dto_item / 100)
+                st.session_state.carrito.append({
+                    "SAP": codigo_sap, "Producto": item_sel, "Lista": precio_l, "Dto": dto_item, "Ahorro": ahorro, "Final": precio_l - ahorro
+                })
+        elif busqueda:
+            st.error("No se encontró el producto.")
+
+    with col_b:
+        st.write("### Resumen de Compra")
+        if st.session_state.carrito:
+            df_car = pd.DataFrame(st.session_state.carrito)
+            st.table(df_car[['Producto', 'Final']])
+            total_ahorro = df_car['Ahorro'].sum()
+            total_pagar = df_car['Final'].sum()
+            
+            st.metric("TOTAL A PAGAR", f"${total_pagar:,.2f}")
+            st.write(f"🎁 Ahorro Total: **${total_ahorro:,.2f}**")
+            
+            if st.button("🗑️ Vaciar Carrito"):
+                st.session_state.carrito = []
+                st.rerun()
+
+    st.divider()
+    if st.button("⬅ Volver a Recalcular"):
+        st.session_state.paso = 1
+        st.session_state.carrito = []
+        st.rerun()
 
 st.markdown('</div>', unsafe_allow_html=True)
