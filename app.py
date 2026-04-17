@@ -32,14 +32,14 @@ def get_base64(file_path):
 logo_base64 = get_base64("logo_wurth.png")
 st.markdown(f'<div style="position:fixed; top:25px; right:50px; width:160px; z-index:1000;"><img src="data:image/png;base64,{logo_base64}"></div>', unsafe_allow_html=True)
 
-# --- 4. CARGA DE DATOS (Mapeo Robusto) ---
+# --- 4. CARGA DE DATOS ---
 @st.cache_data
 def load_data():
     df_p = pd.read_excel("productos.xlsx")
     df_b = pd.read_excel("config_beneficios.xlsx")
     df_p.columns = [str(c).strip() for c in df_p.columns]
     df_b.columns = [str(c).strip() for c in df_b.columns]
-    # Mapeo por posición para mayor seguridad
+    # Mapeo robusto por posición (Col 0: Comercial, 2: Base, 3: Unidad, 4: Tope)
     df_b = df_b.rename(columns={df_b.columns[0]: 'Comercial', df_b.columns[2]: 'Base', df_b.columns[3]: 'Unidad', df_b.columns[4]: 'Tope'})
     return df_p, df_b
 
@@ -49,7 +49,7 @@ except Exception as e:
     st.error(f"Error cargando archivos: {e}")
     st.stop()
 
-# Inicialización de estados para evitar AttributeErrors
+# Inicialización de estados (Blindaje contra AttributeError)
 if 'carrito' not in st.session_state: st.session_state.carrito = []
 if 'paso' not in st.session_state: st.session_state.paso = 1
 if 'temp_dto' not in st.session_state: st.session_state.temp_dto = 0
@@ -57,6 +57,15 @@ if 'temp_cant_total' not in st.session_state: st.session_state.temp_cant_total =
 
 # --- 5. INTERFAZ ---
 st.title("♻️ Plan Canje REDSTRIPE")
+
+# --- INSTRUCTIVO RECUPERADO ---
+with st.expander("ℹ️ ¿Cómo funcionan nuestros descuentos acumulativos?"):
+    st.write("""
+    - **Base:** Descuento inicial otorgado por el simple hecho de participar.
+    - **Unidad:** Por cada herramienta vieja que entregues, sumas un % extra al descuento base.
+    - **Tope Máximo:** El beneficio total nunca podrá superar el tope definido para esa categoría.
+    - **Multicategoría:** Si el cliente trae herramientas de distintos tipos, el sistema aplicará automáticamente el **Tope de descuento más alto** disponible entre las categorías seleccionadas.
+    """)
 
 with st.container():
     st.markdown('<div class="white-card">', unsafe_allow_html=True)
@@ -70,30 +79,38 @@ with st.container():
             cats_selec = st.multiselect("Categorías que entrega el cliente:", df_beneficios['Comercial'].unique())
             u_totales = 0
             if cats_selec:
+                st.write("---")
                 for cat in cats_selec:
                     val = st.number_input(f"Cantidad de '{cat}':", min_value=1, step=1, value=1, key=f"n_{cat}")
                     u_totales += val
         
         if cats_selec:
             reglas = df_beneficios[df_beneficios['Comercial'].isin(cats_selec)]
+            # Regla del tope más alto (Punto 4 solicitado)
             m_base, m_unidad, m_tope = reglas['Base'].max(), reglas['Unidad'].max(), reglas['Tope'].max()
             dto_final = min(m_base + (u_totales * m_unidad), m_tope)
             
             with col_res:
                 st.metric("BONIFICACIÓN OBTENIDA", f"{dto_final}%")
-                st.markdown(f"**Cálculo:**\n* Base: {m_base}%\n* Plus: {u_totales * m_unidad}%\n* Tope categoría: {m_tope}%")
+                st.markdown(f"""
+                **Desglose:**
+                * Unidades Totales: **{u_totales}**
+                * Base Aplicada: **{m_base}%**
+                * Tope de Categoría: **{m_tope}%**
+                """)
             
-            if st.button("Confirmar y Pasar a la Compra ➔"):
+            st.write("---")
+            if st.button("Confirmar Beneficio y Seleccionar Productos ➔"):
                 st.session_state.temp_dto = dto_final
                 st.session_state.temp_cant_total = u_totales
                 st.session_state.paso = 2
                 st.rerun()
         else:
-            st.info("Selecciona las categorías para comenzar.")
+            st.info("Selecciona qué herramientas entrega el cliente para iniciar el cálculo.")
 
     # --- FASE 2: CARRITO Y TICKET ---
     else:
-        # Banner informativo del beneficio
+        # Banner informativo del beneficio activo
         st.markdown(f"""
         <div class="dto-banner">
             <h3 style="margin:0; color:#cc0000;">Bonificación Aplicada: {st.session_state.temp_dto}%</h3>
@@ -103,10 +120,9 @@ with st.container():
 
         st.subheader("2. Datos del Cliente y Selección de Productos")
         
-        # Identificación del Cliente
         c_cli1, c_cli2 = st.columns(2)
         with c_cli1:
-            c_nombre = st.text_input("Nombre / Razón Social", placeholder="Ej: Juan Pérez o Empresa S.A.")
+            c_nombre = st.text_input("Nombre / Razón Social", placeholder="Ej: Juan Pérez")
         with c_cli2:
             c_id = st.text_input("RUT / Cédula de Identidad")
 
@@ -115,8 +131,8 @@ with st.container():
         c_prod, c_car = st.columns([1.1, 0.9])
         
         with c_prod:
-            # Buscador y Navegador Alfabético
-            busq = st.text_input("🔍 Buscar por Código SAP o Nombre del modelo")
+            # Buscador y Menú Alfabético
+            busq = st.text_input("🔍 Buscar por Código SAP o Nombre")
             df_f = df_productos[
                 (df_productos['Código del producto'].astype(str).str.contains(busq)) |
                 (df_productos['Nombre del producto'].str.contains(busq, case=False))
@@ -124,9 +140,9 @@ with st.container():
 
             modelos = sorted(df_f['Nombre del modelo'].dropna().unique())
             if modelos:
-                m_sel = st.selectbox("Modelo (A-Z):", modelos)
+                m_sel = st.selectbox("Modelo (Orden A-Z):", modelos)
                 variantes = df_f[df_f['Nombre del modelo'] == m_sel]
-                p_final_nombre = st.selectbox("Variante:", variantes['Nombre del producto'].unique())
+                p_final_nombre = st.selectbox("Variante específica:", variantes['Nombre del producto'].unique())
                 sap_val = variantes[variantes['Nombre del producto'] == p_final_nombre]['Código del producto'].values[0]
                 
                 p_lista = st.number_input("Precio de Lista Unitario (UYU)", min_value=0.0, step=1.0)
@@ -139,7 +155,7 @@ with st.container():
                     })
                     st.rerun()
             else:
-                st.error("No se encontraron productos.")
+                st.error("No hay productos con ese criterio.")
 
         with c_car:
             st.write("### Resumen de Compra")
@@ -147,12 +163,11 @@ with st.container():
                 df_res = pd.DataFrame(st.session_state.carrito)
                 st.dataframe(df_res[['Producto', 'Final']], use_container_width=True, hide_index=True)
                 
-                total_lista = df_res['Lista'].sum()
                 total_ahorro = df_res['Ahorro'].sum()
                 total_pagar = df_res['Final'].sum()
                 
                 st.metric("TOTAL A PAGAR", f"${total_pagar:,.2f}")
-                st.write(f"🎁 Ahorro Total: **${total_ahorro:,.2f}**")
+                st.write(f"📉 Ahorro total por canje: **${total_ahorro:,.2f}**")
                 
                 if st.button("🗑️ Vaciar Carrito"):
                     st.session_state.carrito = []
@@ -169,23 +184,22 @@ with st.container():
                 st.rerun()
         with b_pdf:
             if st.session_state.carrito and c_nombre and c_id:
-                # Generación de PDF Real
+                # Generación de PDF
                 pdf = FPDF()
                 pdf.add_page()
                 pdf.set_font("Arial", 'B', 16)
                 pdf.set_text_color(204, 0, 0)
-                pdf.cell(0, 10, "PLAN CANJE WÜRTH URUGUAY", ln=True, align='C')
+                pdf.cell(0, 10, "PLAN CANJE WÜRTH URUGUAY - TICKET", ln=True, align='C')
                 pdf.ln(10)
                 
-                pdf.set_font("Arial", '', 11)
+                pdf.set_font("Arial", '', 10)
                 pdf.set_text_color(0, 0, 0)
                 pdf.cell(0, 7, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True)
                 pdf.cell(0, 7, f"Cliente: {c_nombre}", ln=True)
                 pdf.cell(0, 7, f"Documento/RUT: {c_id}", ln=True)
-                pdf.cell(0, 7, f"Herramientas recicladas: {st.session_state.temp_cant_total}", ln=True)
+                pdf.cell(0, 7, f"Herramientas entregadas: {st.session_state.temp_cant_total}", ln=True)
                 pdf.ln(5)
                 
-                # Encabezados Tabla
                 pdf.set_font("Arial", 'B', 10)
                 pdf.set_fill_color(240, 240, 240)
                 pdf.cell(100, 8, " Producto", 1, 0, 'L', True)
